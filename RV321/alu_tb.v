@@ -1,0 +1,128 @@
+`timescale 1ns/1ps
+ 
+module alu_tb;
+ 
+    reg  [31:0] a, b;
+    reg  [2:0]  op;
+    reg         alt;
+    wire [31:0] result;
+    wire        negative, zero, carry, overflow;
+ 
+    integer     errors = 0;
+    integer     tests  = 0;
+ 
+    // Instantiate the ALU under test
+    alu dut (
+        .a        (a),
+        .b        (b),
+        .op      (op),
+        .alt      (alt),
+        .result   (result),
+        .negative (negative),
+        .zero     (zero),
+        .carry    (carry),
+        .overflow (overflow)
+    );
+ 
+    // Opcodes, mirrored from the DUT for readability here
+    localparam OP_ADDSUB = 3'b000;
+    localparam OP_SLL    = 3'b001;
+    localparam OP_SLT    = 3'b010;
+    localparam OP_SLTU   = 3'b011;
+    localparam OP_XOR    = 3'b100;
+    localparam OP_SRLSRA = 3'b101;
+    localparam OP_OR     = 3'b110;
+    localparam OP_AND    = 3'b111;
+ 
+    task run_test;
+        input [31:0] ta;
+        input [31:0] tb;
+        input [2:0]  top;
+        input        talt;
+        input [31:0] expected_result;
+        input        expected_zero;
+        input        expected_negative;
+        begin
+            a   = ta;
+            b   = tb;
+            op = top;
+            alt = talt;
+            #5; // let the combinational logic settle
+ 
+            tests = tests + 1;
+            if (result !== expected_result) begin
+                errors = errors + 1;
+                $display("FAIL [%0d] op=%b alt=%b a=%h b=%h -> result=%h (expected %h)",
+                          tests, top, talt, ta, tb, result, expected_result);
+            end else if (zero !== expected_zero) begin
+                errors = errors + 1;
+                $display("FAIL [%0d] op=%b alt=%b a=%h b=%h -> zero=%b (expected %b)",
+                          tests, top, talt, ta, tb, zero, expected_zero);
+            end else if (negative !== expected_negative) begin
+                errors = errors + 1;
+                $display("FAIL [%0d] op=%b alt=%b a=%h b=%h -> negative=%b (expected %b)",
+                          tests, top, talt, ta, tb, negative, expected_negative);
+            end else begin
+                $display("PASS [%0d] op=%b alt=%b a=%h b=%h -> result=%h",
+                          tests, top, talt, ta, tb, result);
+            end
+        end
+    endtask
+ 
+    initial begin
+        $display("---- alu testbench start ----");
+ 
+        // ADD: 5 + 3 = 8
+        run_test(32'd5, 32'd3, OP_ADDSUB, 1'b0, 32'd8, 1'b0, 1'b0);
+ 
+        // ADD with carry-out: 0xFFFFFFFF + 1 wraps to 0
+        run_test(32'hFFFFFFFF, 32'h00000001, OP_ADDSUB, 1'b0, 32'h00000000, 1'b1, 1'b0);
+ 
+        // SUB: 10 - 4 = 6
+        run_test(32'd10, 32'd4, OP_ADDSUB, 1'b1, 32'd6, 1'b0, 1'b0);
+ 
+        // SUB producing negative: 3 - 5 = -2
+        run_test(32'd3, 32'd5, OP_ADDSUB, 1'b1, -32'd2, 1'b0, 1'b1);
+ 
+        // AND
+        run_test(32'hF0F0F0F0, 32'h0FF00FF0, OP_AND, 1'b0, 32'h00F000F0, 1'b0, 1'b0);
+ 
+        // OR
+        run_test(32'hF0F0F0F0, 32'h0FF00FF0, OP_OR, 1'b0, 32'hFFF0FFF0, 1'b0, 1'b1);
+ 
+        // XOR: identical operands cancel to zero
+        run_test(32'hFFFFFFFF, 32'hFFFFFFFF, OP_XOR, 1'b0, 32'h00000000, 1'b1, 1'b0);
+ 
+        // SLL: 1 << 4 = 16
+        run_test(32'd1, 32'd4, OP_SLL, 1'b0, 32'd16, 1'b0, 1'b0);
+ 
+        // SRL: 0x80000000 >> 4 (logical, zero-fill)
+        run_test(32'h80000000, 32'd4, OP_SRLSRA, 1'b0, 32'h08000000, 1'b0, 1'b0);
+ 
+        // SRA: 0x80000000 >>> 4 (arithmetic, sign-fill)
+        run_test(32'h80000000, 32'd4, OP_SRLSRA, 1'b1, 32'hF8000000, 1'b0, 1'b1);
+ 
+        // SLT signed: -1 < 1 -> true
+        run_test(32'hFFFFFFFF, 32'd1, OP_SLT, 1'b0, 32'd1, 1'b0, 1'b0);
+ 
+        // SLT signed: 1 < -1 -> false
+        run_test(32'd1, 32'hFFFFFFFF, OP_SLT, 1'b0, 32'd0, 1'b1, 1'b0);
+ 
+        // SLTU unsigned: 0xFFFFFFFF < 1 -> false (huge unsigned value)
+        run_test(32'hFFFFFFFF, 32'd1, OP_SLTU, 1'b0, 32'd0, 1'b1, 1'b0);
+ 
+        // SLTU unsigned: 1 < 0xFFFFFFFF -> true
+        run_test(32'd1, 32'hFFFFFFFF, OP_SLTU, 1'b0, 32'd1, 1'b0, 1'b0);
+ 
+        $display("---- alu testbench done: %0d tests, %0d errors ----", tests, errors);
+ 
+        if (errors == 0)
+            $display("ALL TESTS PASSED");
+        else
+            $display("%0d TEST(S) FAILED", errors);
+ 
+        $finish;
+    end
+	 
+endmodule
+ 

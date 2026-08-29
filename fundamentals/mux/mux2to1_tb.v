@@ -4,10 +4,6 @@ module mux2to1_tb;
 
 	reg a, b, sel;
 	wire y;
-	initial begin
-		 $dumpfile("mux.vcd");
-		 $dumpvars(0, mux2to1_tb);
-	end
 
 	
 	// Instantiate the design under test (DUT)
@@ -22,7 +18,7 @@ module mux2to1_tb;
 
 	initial begin
 		$display("a b sel | y");
-		$monitor("a=%b b=%b sel=%b y=%b", a, b, sel, y);
+		$monitor("a=%b b=%b sel=%b | y=%b", a, b, sel, y);
 
 		for (i = 0; i < 8; i = i + 1) begin
 			{a, b, sel} = i;
