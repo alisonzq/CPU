@@ -1,8 +1,6 @@
 module control_fsm (
 	input wire clk,
 	input wire reset,
-	input wire writes_back,
-	input wire is_branch_taken,
 	output reg ir_we,
 	output reg pc_we,
 	output reg ra_we,
@@ -18,7 +16,7 @@ module control_fsm (
 	localparam EXECUTE = 3'b010;
 	localparam MEMORY = 3'b011;
 	localparam WRITEBACK = 3'b100;
-		
+
 	reg [2:0] state = 3'b000;
 	
 	// sequential
@@ -54,15 +52,15 @@ module control_fsm (
 			EXECUTE: begin
 				rz_we = 1'b1;
 				rd_we = 1'b1;
-				pc_we = is_branch_taken;
+				//pc_we = 1'b1; //temp
 			end
 			
 			MEMORY: rw_we = 1'b1;
 			
 			WRITEBACK: begin
-				rf_we = writes_back;
+				rf_we = 1'b1;
 			end
-			
+		
 		endcase
 		
 	end

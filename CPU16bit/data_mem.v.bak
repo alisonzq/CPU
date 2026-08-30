@@ -1,0 +1,11 @@
+module data_mem #(
+    parameter MEM_FILE = ""   // optional preload; usually left empty since
+                               // programs build up data memory themselves
+                               // via stores, unlike ins_mem's program image
+)(
+    input  wire        clk,
+    input  wire        we,
+    input  wire [15:0] addr,
+    input  wire [15:0] data_in,
+    output wire [15:0] data_out
+);
