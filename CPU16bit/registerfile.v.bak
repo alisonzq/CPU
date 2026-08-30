@@ -1,0 +1,26 @@
+module registerfile (
+	input wire clk,
+	input wire reset,
+	input wire we,
+	input wire [2:0] Addr_A, // read port A address
+   input wire [2:0] Addr_B, // read port B address
+   input wire [2:0] Addr_C, // write port address
+   input wire [15:0] C, // data to write into rd_addr
+   output wire [15:0] A, // value read from rs1_addr
+   output wire [15:0] B // value read from rs2_addr
+);
+
+	reg [15:0] registers [0:7];
+	 
+	// writes are synchronous, on the rising clock edge
+	integer i;
+	always @(posedge clk) begin
+		if (reset) begin
+			for (i = 0; i < 8; i = i + 1)
+				registers[i] <= 8'b0;
+		end else if (we && Addr_C != 3'b0) begin
+			registers[Addr+C] <= C;
+		end
+	end
+	
+endmodule 
