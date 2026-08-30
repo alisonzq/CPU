@@ -5,6 +5,8 @@ circuit (`cpu.circ`) for a computer architecture lab, into synthesizable Verilog
 Vivado/Quartus FPGA toolchain. The port was done task-by-task, mirroring the five tasks of the
 original lab, with every module written by hand and verified in simulation against the lab's test data before moving on to the next task.
 
+<img width="1518" height="741" alt="image" src="https://github.com/user-attachments/assets/591fc061-4c2d-4416-9653-43c0ae1319c9" />
+
 ## How this port was done
 
 Every RTL module (`alu.v`, `registerfile.v`, `control_fsm.v`, `ins_mem.v`, `data_mem.v`,
@@ -91,6 +93,8 @@ fixed along the way:
   addition's width *before* being inverted. The actual fix forces self-determined widths via
   concatenation: `{carry, C} = {1'b0, A} + {1'b0, ~B} + 17'b1;`.
 
+<img width="760" height="868" alt="image" src="https://github.com/user-attachments/assets/9fc5ecec-19d2-46c6-9408-737103632126" />
+
 ### Task 2 - Register File
 
 Verified by replaying the exact 16-cycle stimulus extracted from the `.circ` file's own
@@ -100,6 +104,8 @@ Verified by replaying the exact 16-cycle stimulus extracted from the `.circ` fil
 - The `A`/`B` read-port outputs were never actually driven (missing `assign`).
 - An incorrect guard hardwired `R0` to zero on writes (`we && Addr_C != 3'b0`); the spec and the
   RegisterFileTester's own gold data both confirm `R0` is a normal, fully writable register.
+
+<img width="713" height="696" alt="image" src="https://github.com/user-attachments/assets/7c0a962c-d31e-41a3-97ee-b1b7d84270cb" />
 
 ### Task 3 - Basic programmable CPU (ALU instructions only)
 
@@ -159,6 +165,7 @@ monotonically in these golden traces, unlike every earlier task. Final results: 
   unused 3-bit condition codes; added `default: C = 1'b0;`. It also originally used nonblocking (`<=`)
   assignment inside a combinational `always @(*)` block - not a functional bug in isolation, but
   inconsistent with the rest of the design's convention, so cleaned up to blocking (`=`).
+<img width="705" height="374" alt="image" src="https://github.com/user-attachments/assets/79c47962-cba3-42c9-b7df-4902c8fe11f9" />
 
 ## Testing methodology
 
