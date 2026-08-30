@@ -40,3 +40,7 @@ Thumbs.db
 
 # Visual Studio
 .vs
+
+.bak
+
+.hex

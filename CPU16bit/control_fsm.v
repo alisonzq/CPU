@@ -15,7 +15,7 @@ module control_fsm (
 	localparam DECODE = 3'b001;
 	localparam EXECUTE = 3'b010;
 	localparam MEMORY = 3'b011;
-	localparam WRITEBACK = 3'b111;
+	localparam WRITEBACK = 3'b100;
 
 	reg [2:0] state = 3'b000;
 	
@@ -24,7 +24,7 @@ module control_fsm (
 		if (reset)
 			state <= FETCH;
 		else
-			state <= (state == WRITEBACK) ? FETCH : state + 3'b1;
+			state <= (state == WRITEBACK) ? FETCH : state + 3'b001;
    end
 	 
 	//combinational
@@ -63,7 +63,6 @@ module control_fsm (
 		
 		endcase
 		
-		state <= (state == WRITEBACK) ? FETCH : state + 1'b1;
 	end
 endmodule
 		

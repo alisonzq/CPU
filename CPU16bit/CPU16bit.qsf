@@ -55,3 +55,5 @@ set_global_assignment -name VERILOG_FILE registerfile.v
 set_global_assignment -name VERILOG_FILE registerfile_tb.v
 set_global_assignment -name VERILOG_FILE control_fsm.v
 set_global_assignment -name VERILOG_FILE cpu.v
+set_global_assignment -name VERILOG_FILE cpu_tb.v
+set_global_assignment -name HEX_FILE Aluinstrtest.hex
