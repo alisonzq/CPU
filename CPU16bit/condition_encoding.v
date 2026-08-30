@@ -3,7 +3,7 @@ module condition_encoding(
 	input wire N,
 	input wire V,
 	input wire [2:0] condition,
-	output wire C
+	output reg C
 );
 	
 	localparam EQ = 3'b000;

@@ -61,3 +61,7 @@ set_global_assignment -name VERILOG_FILE data_mem.v
 set_global_assignment -name VERILOG_FILE cpu_linklist1_tb.v
 set_global_assignment -name VERILOG_FILE cpu_linklist2_tb.v
 set_global_assignment -name VERILOG_FILE condition_encoding.v
+set_global_assignment -name VERILOG_FILE cpu_mult1_tb.v
+set_global_assignment -name VERILOG_FILE cpu_mult2_tb.v
+set_global_assignment -name VERILOG_FILE cpu_mult3_tb.v
+set_global_assignment -name VERILOG_FILE cpu_mult4_tb.v

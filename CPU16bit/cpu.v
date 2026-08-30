@@ -22,8 +22,16 @@ module cpu #(
 	wire [2:0] addr_b_sel = is_store ? IR[9:7] : IR[2:0];
 	wire is_branch = (op_code == 2'b01);
 	wire [2:0] alu_fun_sel = is_branch ? 3'b001 : alu_fun;
-	
+	wire negative, carry, zero, overflow;
+	wire [15:0] regfile_A, regfile_B; 
 	wire cond_result;
+	wire ir_we, pc_we, ra_we, rb_we, rz_we, rd_we, rw_we, rf_we;
+	wire [15:0] instr_word;
+	wire [15:0] alu_b_in = I_bit ? imm_ext : RB;
+	wire [15:0] data_word;
+	wire [15:0] alu_c;
+	wire is_branch_taken = is_branch && cond_result && rz_we; //rz only high on execute
+
 	condition_encoding cond_inst (
 		.Z (zero),
 		.N (negative),
@@ -31,11 +39,8 @@ module cpu #(
 		.condition (alu_fun),
 		.C (cond_result)
 	);
-	
-	wire is_branch_taken = is_branch && cond_result;
-	
+		
 	//control_fsm instance
-	wire ir_we, pc_we, ra_we, rb_we, rz_we, rd_we, rw_we, rf_we;
 	control_fsm fsm_inst (
 		 .clk   (clk),
 		 .reset (reset),
@@ -52,7 +57,6 @@ module cpu #(
 	);
 	
 	//instruction memory instance
-	wire [15:0] instr_word;
 	ins_mem #(
 		 .MEM_FILE(MEM_FILE)   // forwarding cpu's own MEM_FILE parameter through
 	) imem_inst (
@@ -61,8 +65,6 @@ module cpu #(
 	);
 	
 	//data memory instance
-	wire [15:0] data_word;
-	wire [15:0] alu_c;
 	data_mem dmem_inst (
 		.clk (clk),
 		.we (is_store && rw_we),
@@ -72,8 +74,6 @@ module cpu #(
 	);
 	
 	//alu instance
-	wire [15:0] alu_b_in = I_bit ? imm_ext : RB;
-	wire negative, carry, zero, overflow;
 	alu alu_inst (
 		.A (RA),
 		.B (alu_b_in),
@@ -86,7 +86,6 @@ module cpu #(
 	);
 	
 	//register file instance
-	wire [15:0] regfile_A, regfile_B; 
 	registerfile rf_inst (
 		.clk (clk),
 		.reset (reset),
@@ -98,7 +97,6 @@ module cpu #(
 		.A (regfile_A),
 		.B (regfile_B)
 	);	
-	
 	
 	always @(posedge clk) begin
 		if (reset) PC <= 16'h0000; 
