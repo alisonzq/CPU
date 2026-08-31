@@ -239,6 +239,140 @@ synthesizable Verilog with no simulation-only constructs in the RTL itself (`$re
 parameterized off by default; the hierarchical-poke trick lives entirely in the testbenches, never in
 the DUT).
 
+## Part 2: Pipelining the datapath
+
+The FSM design above is strictly sequential - one instruction fully completes all five stages before
+the next one starts - and gets data, control, and structural hazards "for free" purely because
+instructions never overlap. This second phase rebuilds `cpu.v` as a true overlapping 5-stage pipeline
+(Fetch / Decode / Execute-Compute / Memory / Writeback), following a second lab handout's staged
+roadmap, and adds the real hazard-handling logic that overlap requires. Every stage was built as its
+own increment, compiled, and verified in simulation against a hand-checked golden trace before the next
+stage began - the same discipline as Tasks 1-5 above, just applied to a second, separate `cpu.v`.
+
+### Pipeline structure
+
+Same instruction encoding, same six architectural registers, same halt sentinel (`IR == 16'h4380`) as
+Part 1. Fetch/Decode share one live `IR` register (decode is purely combinational off `IR`); three real
+clocked latches carry state between the remaining stages: the Decode→Execute latch (`*_ex` signals -
+`is_load_ex`, `is_store_ex`, `writes_back_ex`, `is_branch_ex`, `addr_c_ex`, `alu_fun_ex`, `imm_ext_ex`,
+`addr_a_ex`, `addr_b_sel_ex`, plus `RA`/`RB`), the Execute→Memory latch (`*_mem` signals), and the
+Memory→Writeback latch (`writes_back_wb`, `addr_c_wb`).
+
+Built in six increments, mirroring the pipelining lecture's own progression:
+
+| Stage | What it added | Result |
+|-------|----------------|--------|
+| A | Pure structural pipelining - instructions flow through all 5 stages with zero hazard handling | Passed |
+| B | Stall-only hazard detection: freeze `PC`/`IR`/Decode and inject a bubble into the `_ex` latch on any RAW hazard | Passed |
+| C | Memory→Compute forwarding: an ALU producer sitting in Memory forwards `RZ` into whichever consumer is now in Compute (gap-0 ALU-to-ALU, zero stall) | Passed |
+| D | Writeback→Compute forwarding: a producer sitting in Writeback forwards `RW` into Compute (gap-1 ALU, zero stall; load-use, one mandatory stall) | Passed |
+| E Part 1 | Control hazards, naive: target + comparison computed in Compute, so every taken branch discards 2 wrong-path instructions | Passed |
+| E Part 2 | Control hazards, hardware-optimized: target adder + a dedicated comparator moved into Decode, cutting the penalty to 1 wrong-path instruction | Passed |
+
+### How structural hazards were avoided
+
+No dedicated structural-hazard detection logic exists anywhere in the pipeline - the datapath is built
+so two instructions never contend for the same physical resource in the same cycle:
+
+- Separate instruction and data memories (`ins_mem`/`data_mem`), so a Fetch-stage instruction read and
+  a Memory-stage data access never compete for the same port.
+- The register file has two combinational read ports (serving Decode) and one synchronous write port
+  (serving Writeback). Since the pipeline only ever has one instruction in Decode and one in Writeback
+  per cycle, there's never a third contender for either port - a same-address read/write in the same
+  cycle is a *data*-hazard timing question (below), not a resource conflict.
+- A single ALU instance serves whichever one instruction currently occupies Compute; the pipeline never
+  lets two instructions share a stage, so there's only ever one ALU request per cycle.
+- Stage E Part 2 adds a second, independent comparator in Decode specifically so branch resolution
+  doesn't have to share the Compute-stage ALU with whatever instruction is already in Execute.
+
+### How data hazards were avoided (Stages B-D)
+
+RAW hazards - a consumer in Decode needing a register a still-in-flight producer hasn't written back
+yet - are resolved by forwarding wherever possible, falling back to a stall only where forwarding
+physically can't reach:
+
+```verilog
+// final stall equation, after Stage D
+wire stall = (writes_back_ex && is_load_ex && (addr_c_ex == addr_a || addr_c_ex == addr_b_sel))
+          || (writes_back_wb && (addr_c_wb == addr_a || addr_c_wb == addr_b_sel));
+```
+
+The first term is the one truly mandatory stall: a load producer sitting in Execute can't forward its
+result because the loaded value isn't ready until Writeback. The second term is a same-cycle
+register-file read/write collision (producer in Writeback while the consumer is simultaneously in
+Decode) that forwarding can't reach either, since the consumer isn't in Compute yet.
+
+```verilog
+// final forwarding equations
+wire fwd_mem_a = writes_back_mem && !is_load_mem && (addr_c_mem == addr_a_ex);
+wire fwd_mem_b = writes_back_mem && !is_load_mem && (addr_c_mem == addr_b_sel_ex) && !I_bit_ex;
+wire fwd_wb_a  = !fwd_mem_a && writes_back_wb && (addr_c_wb == addr_a_ex);
+wire fwd_wb_b  = !fwd_mem_b && writes_back_wb && (addr_c_wb == addr_b_sel_ex) && !I_bit_ex;
+wire [15:0] alu_a_sel = fwd_mem_a ? RZ : (fwd_wb_a ? RW : RA);
+wire [15:0] alu_b_sel = I_bit_ex ? imm_ext_ex : (fwd_mem_b ? RZ : (fwd_wb_b ? RW : RB));
+```
+
+Memory-stage forwarding (fresher, one instruction closer to the consumer) always wins over
+Writeback-stage forwarding when both could match. `addr_a_ex`/`addr_b_sel_ex` exist because the
+forwarding comparison happens at Compute, not Decode, so a consumer's own source-register addresses
+have to be latched one stage forward to be compared against a producer sitting in Memory or Writeback.
+
+### How control hazards were avoided (Stage E)
+
+A branch's outcome isn't known until it resolves, and whatever got fetched on the not-yet-corrected
+`PC` in the meantime has to be discarded before it can do damage. Two designs were built, in order:
+
+**Part 1 (naive, matching the lecture's baseline).** Target and comparison are both computed in
+Compute, one stage later than Decode (`is_branch_taken = is_branch_ex && cond_result`,
+`target = pc_ex + sign_extend(addr_c_ex)`). That one-stage lag means exactly 2 wrong-path instructions
+get fetched behind every taken branch, needing two structurally different discards: `IR <= 16'h0000`
+in the PC/IR block (kills the instruction fetched on the stale PC) and a forced bubble in the `_ex`
+latch (kills the instruction that had already reached Decode by the time the branch resolved).
+
+**Part 2 (hardware-optimized, matching the lecture's follow-up).** The target adder and a dedicated
+subtract-based comparator move into Decode itself, off the live `IR`/register-file outputs:
+
+```verilog
+wire [15:0] target        = PC + {{13{addr_c[2]}}, addr_c};
+wire        is_branch_taken = is_branch && decode_cond_result; // from the new Decode-stage comparator
+```
+
+Since resolution now happens while the branch is still live in Decode, only 1 wrong-path instruction is
+ever fetched - the second one is simply never fetched, because `PC` redirects before that fetch would
+happen - and only one discard mechanism is needed (the `_ex`-latch bubble from Part 1 was removed
+entirely, since nothing wrong-path rides into `_ex` anymore).
+
+The trade-off: Decode has no forwarding network, so a branch depending on a very recent producer - free
+via Compute-stage forwarding in Part 1 - now needs the register file to actually hold the correct value
+before Decode re-reads it, which costs two new, branch-specific stall terms:
+
+```verilog
+|| (is_branch && writes_back_ex  && (addr_c_ex  == addr_a || addr_c_ex  == addr_b_sel))  // producer in Execute, gap=0
+|| (is_branch && writes_back_mem && (addr_c_mem == addr_a || addr_c_mem == addr_b_sel))  // producer in Memory, gap=1
+```
+
+The pre-existing `writes_back_wb` term already covers gap≥2 for a branch the same way it does for any
+other consumer - no change needed there.
+
+### Testing methodology (pipelining)
+
+Same discipline as Tasks 1-5, extended to pipeline-specific signals: each stage's testbench checks
+`cpu_out` every cycle against a golden trace, plus that stage's own key internal signals (`stall`,
+`fwd_mem_a/b`, `fwd_wb_a/b` for B-D; `stall`, `is_branch_taken`, `target` for E), plus final
+register-file contents. Every golden trace was captured from a reference implementation that was itself
+compiled and simulated - never hand-derived on paper - and every testbench was sanity-checked by
+deliberately reintroducing a known bug and confirming the testbench actually fails, not just that it
+passes on correct code.
+
+| Test | Covers | Result |
+|------|--------|--------|
+| `tb_cpu_stageA.v` | Structural pipelining, no hazards | Passed |
+| `tb_cpu_stageB.v` | Stall-only hazard detection | Passed |
+| `tb_cpu_stageC.v` | Memory→Compute forwarding | Passed |
+| `tb_cpu_stageD.v` | Writeback→Compute forwarding, gap-0/1/2 ALU and load cases | Passed |
+| `tb_cpu_stageE.v` | Naive 2-cycle control-hazard squash; taken/not-taken; forwarding into a branch operand | Passed |
+| `tb_cpu_stageE2.v` | Decode-stage target/comparator, 1-cycle squash, the two new branch-specific stall terms | Passed |
+
 ## Suggested next steps
 
 - Synthesize each module (or the full `cpu.v` hierarchy) in Vivado/Quartus and resolve any synthesis
@@ -246,10 +380,18 @@ the DUT).
   has its `default` case.
 - Add I/O: a way to actually observe `cpu_out` on hardware (seven-segment display, UART, or onboard
   LEDs for a subset of bits), plus a reset button/switch mapped to the `reset` input.
-- Timing closure: constrain the clock and check that the combinational path through `alu_c` →
-  `data_mem` (address) → `data_out` and the `alu_c` → `condition_encoding` → `is_branch_taken` →
-  `control_fsm` → `pc_we` path both meet timing at the target clock frequency, since both are longer
-  combinational chains than a typical single-cycle path.
+- Timing closure (Part 1 FSM): constrain the clock and check that the combinational path through
+  `alu_c` → `data_mem` (address) → `data_out` and the `alu_c` → `condition_encoding` →
+  `is_branch_taken` → `control_fsm` → `pc_we` path both meet timing at the target clock frequency,
+  since both are longer combinational chains than a typical single-cycle path.
+- Timing closure (Part 2 pipeline): Stage E Part 2 put a full `regfile_A`/`regfile_B` → subtract →
+  comparator → `is_branch_taken` → `PC` mux chain directly on the critical path from register-file read
+  to the next fetch address - worth checking this doesn't become the limiting path once actually
+  synthesized, since it's now longer than the plain ALU → `RZ` path any other instruction takes.
 - Consider adding a hardware smoke test (blink an LED after `halt` asserts) before trying to load a full
   test program via BRAM initialization on the actual board.
-  Pipelining. The current design is strictly sequential - one instruction fully completes all five stages before the next one starts - and several of the design choices documented above (data_mem addressed by live alu_c instead of RZ; IR/RA/RB treated as frozen from DECODE through MEMORY) rely on exactly that non-overlap. Turning this into a true 5-stage pipeline (overlapping Fetch/Decode/Execute/Memory/Writeback of consecutive instructions) would need real hazard handling that this version currently gets for free: data hazards (a RAW hazard when an instruction reads a register that a still-in-flight earlier instruction hasn't written back yet, needing forwarding paths instead of just reading the register file), control hazards (a branch's outcome isn't known until its own EXECUTE stage, by which point later stages will have already fetched one or more wrong-path instructions - needing either a pipeline flush/bubble on every taken branch or a branch predictor), and structural hazards if ins_mem/data_mem ever need to be accessed by two instructions in the same cycle. The stale-IR-during-FETCH bug found in Task 5 is a preview of the kind of hazard that shows up everywhere once stages actually overlap - a pipelined redesign would need a proper hazard detection unit rather than the single targeted rz_we gate used here.
+- Decode-stage forwarding: Stage E Part 2 deliberately leaves the gap-0/gap-1 branch-operand hazard as
+  a stall rather than adding forwarding paths into Decode (out of scope for this course, per the
+  handout). A real design wanting branches to never stall on a recent producer would need to extend the
+  forwarding network into Decode, or add a branch predictor so the penalty is only paid on a
+  misprediction rather than on every taken branch.
