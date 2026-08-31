@@ -7,8 +7,9 @@ module cpu #(
     output wire halt
 );
 
-	reg [15:0] PC, IR,  RA, RB, RZ, RW, RD;
-
+	reg [15:0] PC, IR, RA, RB, RZ, RW, RD;
+	
+	//Decode
 	wire [1:0] op_code = IR[15:14];
 	wire [2:0] alu_fun = IR[13:11];
 	wire 		  I_bit = IR[10];
@@ -21,40 +22,75 @@ module cpu #(
 	wire writes_back = (op_code == 2'b00) || is_load;
 	wire [2:0] addr_b_sel = is_store ? IR[9:7] : IR[2:0];
 	wire is_branch = (op_code == 2'b01);
-	wire [2:0] alu_fun_sel = is_branch ? 3'b001 : alu_fun;
+	
 	wire negative, carry, zero, overflow;
+	wire negative_branch, carry_branch, zero_branch, overflow_branch;
 	wire [15:0] regfile_A, regfile_B; 
 	wire cond_result;
-	wire ir_we, pc_we, ra_we, rb_we, rz_we, rd_we, rw_we, rf_we;
 	wire [15:0] instr_word;
-	wire [15:0] alu_b_in = I_bit ? imm_ext : RB;
 	wire [15:0] data_word;
 	wire [15:0] alu_c;
-	wire is_branch_taken = is_branch && cond_result && rz_we; //rz only high on execute
+	
+	//comparator at decode stage
+	wire [15:0] decode_sub      = regfile_A - regfile_B;
+	wire        decode_zero     = (decode_sub == 16'h0000);
+	wire        decode_negative = decode_sub[15];
+	wire        decode_overflow = (regfile_A[15] != regfile_B[15]) && (decode_sub[15] != regfile_A[15]);
+	wire decode_cond_result;
 
+	//Execute
+	reg is_load_ex, is_store_ex, writes_back_ex, is_branch_ex, I_bit_ex;
+	reg [2:0] addr_c_ex;
+	reg [2:0] alu_fun_ex;
+	reg [15:0] imm_ext_ex;
+	wire [2:0] alu_fun_sel = is_branch_ex ? 3'b001 : alu_fun_ex;
+	reg [2:0] addr_a_ex;
+	reg [2:0] addr_b_sel_ex;
+	
+	wire is_branch_taken = is_branch && decode_cond_result;	
+	wire [15:0] target = PC + {{13{addr_c[2]}}, addr_c}; //displacement of producer 
+	
+	//Memory
+	reg is_load_mem, is_store_mem, writes_back_mem, is_branch_mem;
+	reg [2:0] addr_c_mem;
+	
+	//Write Back
+	reg writes_back_wb;
+	reg [2:0] addr_c_wb;
+
+	//stalling
+	wire stall = (writes_back_ex  && is_load_ex && (addr_c_ex  == addr_a || addr_c_ex  == addr_b_sel)) //e.g. stalls until wb if producer is a load 
+				  || (is_branch && writes_back_ex && (addr_c_ex  == addr_a || addr_c_ex  == addr_b_sel)) //branch stalling on a plain ALU producer sitting at execute at gap=0
+				  || (is_branch && writes_back_mem && (addr_c_mem == addr_a || addr_c_mem == addr_b_sel)) //branch doesn't reach compute for comparison, forwarding path unavailable
+				  || (writes_back_wb  && (addr_c_wb  == addr_a || addr_c_wb  == addr_b_sel)); //producer is in wb while consumer is still in decode, still need one stall cycle 
+	
+	//forwarding
+	wire fwd_mem_a = writes_back_mem && !is_load_mem && (addr_c_mem == addr_a_ex);
+	wire fwd_mem_b = writes_back_mem && !is_load_mem && (addr_c_mem == addr_b_sel_ex) && !I_bit_ex;
+	
+	wire fwd_wb_a = !fwd_mem_a && writes_back_wb && (addr_c_wb == addr_a_ex);
+	wire fwd_wb_b = !fwd_mem_b && writes_back_wb && (addr_c_wb == addr_b_sel_ex) && !I_bit_ex;
+
+	wire [15:0] alu_a_sel = fwd_mem_a ? RZ : (fwd_wb_a ? RW : RA);
+	wire [15:0] alu_b_sel = I_bit_ex ? imm_ext_ex : (fwd_mem_b ? RZ : (fwd_wb_b ? RW : RB));
+	
 	condition_encoding cond_inst (
 		.Z (zero),
 		.N (negative),
 		.V (overflow),
-		.condition (alu_fun),
+		.condition (alu_fun_sel),
 		.C (cond_result)
 	);
-		
-	//control_fsm instance
-	control_fsm fsm_inst (
-		 .clk   (clk),
-		 .reset (reset),
-		 .writes_back (writes_back),
-		 .is_branch_taken (is_branch_taken),
-		 .ir_we (ir_we),
-		 .pc_we (pc_we),
-		 .ra_we (ra_we),
-		 .rb_we (rb_we),
-		 .rz_we (rz_we),
-		 .rd_we (rd_we),
-		 .rw_we (rw_we),
-		 .rf_we (rf_we)
+	
+	condition_encoding cond_inst_decode (
+		.Z (decode_zero),
+		.N (decode_negative),
+		.V (decode_overflow),
+		.condition (alu_fun),
+		.C (decode_cond_result)
 	);
+	
+
 	
 	//instruction memory instance
 	ins_mem #(
@@ -67,16 +103,16 @@ module cpu #(
 	//data memory instance
 	data_mem dmem_inst (
 		.clk (clk),
-		.we (is_store && rw_we),
-		.addr (alu_c),
+		.we (is_store_mem),
+		.addr (RZ),
 		.data_in (RD),
 		.data_out (data_word)
 	);
 	
 	//alu instance
 	alu alu_inst (
-		.A (RA),
-		.B (alu_b_in),
+		.A (alu_a_sel),
+		.B (alu_b_sel),
 		.fun (alu_fun_sel),
 		.C (alu_c),
 		.negative (negative),
@@ -89,51 +125,104 @@ module cpu #(
 	registerfile rf_inst (
 		.clk (clk),
 		.reset (reset),
-		.we(rf_we),
+		.we(writes_back_wb),
 		.Addr_A (addr_a),
 		.Addr_B (addr_b_sel),
-		.Addr_C (addr_c),
+		.Addr_C (addr_c_wb),
 		.C (RW),
 		.A (regfile_A),
 		.B (regfile_B)
 	);	
 	
 	always @(posedge clk) begin
-		if (reset) PC <= 16'h0000; 
-		else if (pc_we) begin
-			if (is_branch_taken) PC <= PC + {{13{IR[9]}}, IR[9:7]};
-			else PC <= PC + 16'h0001;
+		if (reset) begin
+			PC <= 16'h0000;
+			IR <= 16'h0000;
+		end else if (is_branch_taken) begin
+			PC <= target;
+			IR <= 16'h0000; //  what's after the branch should'nt make it to compute
+		end else if (stall) begin //hold at stall
+		end else begin
+			PC <= PC + 16'h0001;
+			IR <= instr_word;
 		end
-	end
-	
-	always @(posedge clk) begin
-		if (reset) IR <= 16'h0000;
-		else if (ir_we) IR <= instr_word;
 	end
 	
 	always @(posedge clk) begin
 		if (reset)  begin
 			RA <= 16'h0000;
 			RB <= 16'h0000;
+			is_load_ex <= 1'b0;
+			is_store_ex <= 1'b0;
+			writes_back_ex <= 1'b0;
+			is_branch_ex <= 1'b0;
+			I_bit_ex <= 1'b0;
+			addr_c_ex <= 3'b000;
+			alu_fun_ex <= 3'b000;
+			imm_ext_ex <= 16'h0000;
+			addr_a_ex <= 3'b000;
+			addr_b_sel_ex <= 3'b000;
+			
+			is_load_mem <= 1'b0;
+			is_store_mem <= 1'b0;
+			writes_back_mem <= 1'b0;
+			is_branch_mem <= 1'b0;
+			addr_c_mem <= 3'b000;
+			
+			writes_back_wb <= 1'b0;
+			addr_c_wb <= 3'b000;
 		end else begin
-			if (ra_we) RA <= regfile_A;
-			if (rb_we) RB <= regfile_B;
+			RA <= regfile_A;
+			RB <= regfile_B;
+			
+			if (!stall) begin
+				is_load_ex <= is_load;
+				is_store_ex <= is_store;
+				writes_back_ex <= writes_back;
+				is_branch_ex <= is_branch;
+				I_bit_ex <= I_bit;
+				addr_c_ex <= addr_c;
+				alu_fun_ex <= alu_fun;
+				imm_ext_ex <= imm_ext;
+				addr_a_ex <= addr_a;
+				addr_b_sel_ex <= addr_b_sel;
+			end else begin //bubble
+				is_load_ex <= 1'b0;
+				is_store_ex <= 1'b0;
+				writes_back_ex <= 1'b0;
+				is_branch_ex <= 1'b0;
+				I_bit_ex <= 1'b0;
+				addr_c_ex <= 3'b000;
+				alu_fun_ex <= 3'b000;
+				imm_ext_ex <= 16'h0000;
+				addr_a_ex <= 3'b000;
+				addr_b_sel_ex <= 3'b000;
+			end
+			
+			is_load_mem <= is_load_ex;
+			is_store_mem <= is_store_ex;
+			writes_back_mem <= writes_back_ex;
+			is_branch_mem <= is_branch_ex;
+			addr_c_mem <= addr_c_ex;
+
+			writes_back_wb <= writes_back_mem;
+			addr_c_wb <= addr_c_mem;
 		end
 	end
 	
 	always @(posedge clk) begin
 		if (reset) RZ <= 16'h0000;
-		else if (rz_we) RZ <= alu_c;
+		else RZ <= alu_c;
 	end
 
 	always @(posedge clk) begin
 		if (reset) RD <= 16'h0000;
-		else if (rd_we) RD <= RB;
+		else RD <= RB;
 	end
 	
 	always @(posedge clk) begin
 		if (reset) RW <= 16'h0000;
-		else if (rw_we) RW <= is_load ? data_word : RZ;
+		else RW <= is_load_mem ? data_word : RZ;
 	end
 	
 	assign halt = (IR == 16'h4380);

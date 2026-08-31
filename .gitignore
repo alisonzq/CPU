@@ -1,0 +1,49 @@
+# Quartus generated files
+db
+incremental_db
+output_files
+
+# Simulation files
+.vcd
+.wlf
+transcript
+vsim.wlf
+modelsim.ini
+work
+
+# Compilation outputs
+.rpt
+.smsg
+.summary
+.qws
+.bak
+
+# Programming files
+.sof
+.pof
+.jic
+.rbf
+
+# Logs
+.log
+
+# Temporary files
+.tmp
+.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode
+
+# Visual Studio
+.vs
+
+*.bak
+
+*.hex
+
+*.qws
+
